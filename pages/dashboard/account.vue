@@ -18,6 +18,7 @@ import GridAccountActions from '~/components/grid/AccountActions.vue';
 import GridLoadProgress from '~/components/grid/LoadProgress.vue';
 import ConfirmModal from '~/components/modal/Confirm.vue';
 import LoginModal from '~/components/modal/Login.vue';
+import SyncRangeModal from '~/components/modal/SyncRange.vue';
 import toastFactory from '~/composables/toast';
 import useLoginCheck from '~/composables/useLoginCheck';
 import { IMAGE_PROXY, websiteName } from '~/config';
@@ -39,12 +40,20 @@ interface PromiseInstance {
   reject: (reason?: any) => void;
 }
 
+interface SyncRangeSelection {
+  syncDateRange: Preferences['syncDateRange'];
+  syncDatePoint: number;
+  syncToTimestamp: number;
+  actualDateRange: string;
+  rangeLabel: string;
+  isAll: boolean;
+}
+
 const toast = toastFactory();
 const modal = useModal();
 const { checkLogin } = useLoginCheck();
 
-const { getSyncTimestamp, getSyncRangeLabel, isSyncAll } = useSyncDeadline();
-const syncToTimestamp = getSyncTimestamp();
+const { getSyncTimestamp, getSyncRangeLabel, isSyncAll, getActualDateRange } = useSyncDeadline();
 
 const preferences = usePreferences();
 
@@ -66,7 +75,7 @@ function addAccount() {
 }
 async function onSelectAccount(account: MpAccount) {
   addBtnLoading.value = true;
-  await loadAccountArticle(account, false);
+  await loadAccountArticle(account, getSyncTimestamp(), false);
   await refresh();
   addBtnLoading.value = false;
   toast.success('公众号添加成功', `已成功添加公众号【${account.nickname}】，并同步了第一页的文章数据`);
@@ -84,7 +93,49 @@ const syncingRowId = ref<string | null>(null);
 
 const syncTimer = ref<number | null>(null);
 
-async function _load(account: MpAccount, begin: number, loadMore: boolean, promise: PromiseInstance) {
+function getDefaultSyncOptions() {
+  const current = preferences.value as unknown as Preferences;
+  return {
+    syncDateRange: current.syncDateRange,
+    syncDatePoint: current.syncDatePoint,
+  };
+}
+
+function buildSyncRangeSelection(options: Pick<Preferences, 'syncDateRange' | 'syncDatePoint'>): SyncRangeSelection {
+  return {
+    ...options,
+    syncToTimestamp: getSyncTimestamp(options),
+    actualDateRange: getActualDateRange(options),
+    rangeLabel: getSyncRangeLabel(options.syncDateRange),
+    isAll: isSyncAll(options.syncDateRange),
+  };
+}
+
+function getSyncRangeMessage(selection: SyncRangeSelection) {
+  return selection.isAll ? '本次同步范围：全部' : `本次同步范围：${selection.actualDateRange}`;
+}
+
+function openSyncRangeModal(): Promise<SyncRangeSelection | null> {
+  return new Promise(resolve => {
+    modal.open(SyncRangeModal, {
+      ...getDefaultSyncOptions(),
+      onConfirm: (selection: Pick<Preferences, 'syncDateRange' | 'syncDatePoint'>) => {
+        resolve(buildSyncRangeSelection(selection));
+      },
+      onCancel: () => {
+        resolve(null);
+      },
+    });
+  });
+}
+
+async function _load(
+  account: MpAccount,
+  begin: number,
+  loadMore: boolean,
+  promise: PromiseInstance,
+  syncToTimestamp: number
+) {
   if (isCanceled.value) {
     isCanceled.value = false; // 这里需要将状态复位
     promise.reject(new Error('已取消同步'));
@@ -126,7 +177,7 @@ async function _load(account: MpAccount, begin: number, loadMore: boolean, promi
   }
 
   if (articles.at(-1)!.create_time < syncToTimestamp) {
-    // 已同步到配置的时间范围
+    // 已同步到本次选择的截止时间
     loadMore = false;
   }
 
@@ -140,7 +191,7 @@ async function _load(account: MpAccount, begin: number, loadMore: boolean, promi
           promise.reject(new Error('已取消同步'));
           return;
         }
-        _load(account, begin, true, promise);
+        _load(account, begin, true, promise, syncToTimestamp);
       },
       ((preferences.value as unknown as Preferences).accountSyncSeconds || 5) * 1000
     );
@@ -152,11 +203,11 @@ async function _load(account: MpAccount, begin: number, loadMore: boolean, promi
 }
 
 // 同步指定公众号
-async function loadAccountArticle(account: MpAccount, loadMore = true) {
+async function loadAccountArticle(account: MpAccount, syncToTimestamp: number, loadMore = true) {
   return new Promise((resolve, reject) => {
     const promise: PromiseInstance = { resolve, reject };
 
-    _load(account, 0, loadMore, promise).catch(e => {
+    _load(account, 0, loadMore, promise, syncToTimestamp).catch(e => {
       syncingRowId.value = null;
       isSyncing.value = false;
 
@@ -168,19 +219,37 @@ async function loadAccountArticle(account: MpAccount, loadMore = true) {
   });
 }
 
+async function syncSingleAccount(account: MpAccount) {
+  if (!checkLogin()) return;
+
+  const selection = await openSyncRangeModal();
+  if (!selection) return;
+
+  isCanceled.value = false;
+
+  try {
+    await loadAccountArticle(account, selection.syncToTimestamp);
+    toast.success('同步完成', `公众号【${account.nickname}】的文章已同步完毕（${getSyncRangeMessage(selection)}）`);
+  } catch (e: any) {
+    toast.error('同步失败', e.message);
+  }
+}
+
 // 同步所有公众号
 async function loadSelectedAccountArticle() {
   if (!checkLogin()) return;
+
+  const selection = await openSyncRangeModal();
+  if (!selection) return;
 
   isCanceled.value = false;
 
   try {
     const rows = getSelectedRows();
     for (const account of rows) {
-      await loadAccountArticle(account);
+      await loadAccountArticle(account, selection.syncToTimestamp);
     }
-    const rangeHint = isSyncAll() ? '' : `（同步范围：${getSyncRangeLabel()}）`;
-    toast.success('同步完成', `已成功同步 ${rows.length} 个公众号${rangeHint}`);
+    toast.success('同步完成', `已成功同步 ${rows.length} 个公众号（${getSyncRangeMessage(selection)}）`);
   } catch (e: any) {
     toast.error('同步失败', e.message);
   }
@@ -308,17 +377,7 @@ const columnDefs = ref<ColDef[]>([
     cellRenderer: GridAccountActions,
     cellRendererParams: {
       onSync: (params: ICellRendererParams) => {
-        if (!checkLogin()) return;
-
-        isCanceled.value = false;
-        loadAccountArticle(params.data)
-          .then(() => {
-            const rangeHint = isSyncAll() ? '' : `（同步范围：${getSyncRangeLabel()}）`;
-            toast.success('同步完成', `公众号【${params.data.nickname}】的文章已同步完毕${rangeHint}`);
-          })
-          .catch(e => {
-            toast.error('同步失败', e.message);
-          });
+        syncSingleAccount(params.data);
       },
       onStop: (params: ICellRendererParams) => {
         isCanceled.value = true;
@@ -482,8 +541,6 @@ function exportAccount() {
     exportBtnLoading.value = false;
   }
 }
-
-const { getActualDateRange } = useSyncDeadline();
 </script>
 
 <template>
@@ -530,7 +587,7 @@ const { getActualDateRange } = useSyncDeadline();
           >同步</UButton
         >
         <div class="hidden xl:flex flex-1 justify-end">
-          <span class="self-end text-sm text-blue-500 font-medium">同步范围: {{ getActualDateRange() }}</span>
+          <span class="self-end text-sm text-blue-500 font-medium">默认同步范围: {{ getActualDateRange() }}</span>
         </div>
       </header>
 

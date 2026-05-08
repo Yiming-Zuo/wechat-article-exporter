@@ -2,12 +2,19 @@ import dayjs, { Dayjs } from 'dayjs';
 import { MP_ORIGIN_TIMESTAMP } from '~/config';
 import type { Preferences } from '~/types/preferences';
 
+type SyncDateRange = Preferences['syncDateRange'];
+
+interface SyncDeadlineOptions {
+  syncDateRange?: SyncDateRange;
+  syncDatePoint?: number;
+}
+
 export default () => {
   const preferences = usePreferences();
 
-  function getDeadline(): Dayjs {
-    const syncDateRange = (preferences.value as unknown as Preferences).syncDateRange;
-    const syncDatePoint = (preferences.value as unknown as Preferences).syncDatePoint;
+  function getDeadline(options: SyncDeadlineOptions = {}): Dayjs {
+    const syncDateRange = options.syncDateRange ?? (preferences.value as unknown as Preferences).syncDateRange;
+    const syncDatePoint = options.syncDatePoint ?? (preferences.value as unknown as Preferences).syncDatePoint;
 
     const start = dayjs().add(1, 'days').startOf('day');
     switch (syncDateRange) {
@@ -46,14 +53,14 @@ export default () => {
    *
    * @description 该时间戳会与文章的发布时间(create_time)进行比对，若文章的发布时间早于该值，则不再继续同步该公众号
    */
-  function getSyncTimestamp() {
-    return getDeadline().unix();
+  function getSyncTimestamp(options: SyncDeadlineOptions = {}) {
+    return getDeadline(options).unix();
   }
 
-  function getActualDateRange() {
+  function getActualDateRange(options: SyncDeadlineOptions = {}) {
     const format = 'YYYY-MM-DD HH:mm';
     const now = dayjs().format(format);
-    const deadline = getDeadline();
+    const deadline = getDeadline(options);
 
     return now + ' ~ ' + deadline.format(format);
   }
@@ -109,8 +116,8 @@ export default () => {
   /**
    * 获取当前同步范围的可读标签
    */
-  function getSyncRangeLabel(): string {
-    const syncDateRange = (preferences.value as unknown as Preferences).syncDateRange;
+  function getSyncRangeLabel(syncDateRange?: SyncDateRange): string {
+    syncDateRange = syncDateRange ?? (preferences.value as unknown as Preferences).syncDateRange;
     const option = getSelectOptions().find(o => o.value === syncDateRange);
     return option?.label ?? '全部';
   }
@@ -118,8 +125,8 @@ export default () => {
   /**
    * 当前同步范围是否为全部
    */
-  function isSyncAll(): boolean {
-    const syncDateRange = (preferences.value as unknown as Preferences).syncDateRange;
+  function isSyncAll(syncDateRange?: SyncDateRange): boolean {
+    syncDateRange = syncDateRange ?? (preferences.value as unknown as Preferences).syncDateRange;
     return syncDateRange === 'all';
   }
 
