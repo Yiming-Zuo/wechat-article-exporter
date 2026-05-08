@@ -3,11 +3,13 @@ import { formatDistance } from 'date-fns';
 import { request } from '#shared/utils/request';
 import LoginModal from '~/components/modal/Login.vue';
 import StorageUsage from '~/components/StorageUsage.vue';
+import useLoginCheck from '~/composables/useLoginCheck';
 import { IMAGE_PROXY } from '~/config';
 import type { LogoutResponse } from '~/types/types';
 
 const loginAccount = useLoginAccount();
 const modal = useModal();
+const { validateLogin } = useLoginCheck();
 
 const now = ref(new Date());
 const distance = computed(() => {
@@ -80,7 +82,7 @@ const logoutBtnLoading = ref(false);
 async function logout() {
   logoutBtnLoading.value = true;
   const { statusCode, statusText } = await request<LogoutResponse>('/api/web/mp/logout');
-  if (statusCode === 200) {
+  if (statusCode === 200 || statusCode === 401) {
     loginAccount.value = null;
   } else {
     alert(statusText);
@@ -93,6 +95,7 @@ onMounted(() => {
   timer = window.setInterval(() => {
     now.value = new Date();
   }, 1000);
+  validateLogin(false);
 });
 onUnmounted(() => {
   window.clearInterval(timer);

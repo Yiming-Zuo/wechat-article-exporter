@@ -17,18 +17,61 @@ import type {
 const loginAccount = useLoginAccount();
 const credentials = useLocalStorage<ParsedCredential[]>('auto-detect-credentials:credentials', []);
 
+function filterPublishPageByTimestamp(publishPage: PublishPage, syncToTimestamp?: number): [PublishPage, boolean] {
+  if (!syncToTimestamp) {
+    return [publishPage, false];
+  }
+
+  let reachedSyncLimit = false;
+  const publishList = publishPage.publish_list.flatMap(item => {
+    if (!item.publish_info) {
+      return [];
+    }
+
+    const publishInfo: PublishInfo = JSON.parse(item.publish_info);
+    if (publishInfo.appmsgex.some(article => article.create_time < syncToTimestamp)) {
+      reachedSyncLimit = true;
+    }
+
+    const filteredArticles = publishInfo.appmsgex.filter(article => article.create_time >= syncToTimestamp);
+    if (filteredArticles.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ...item,
+        publish_info: JSON.stringify({
+          ...publishInfo,
+          appmsgex: filteredArticles,
+        }),
+      },
+    ];
+  });
+
+  return [
+    {
+      ...publishPage,
+      publish_list: publishList,
+    },
+    reachedSyncLimit,
+  ];
+}
+
 /**
  * 获取文章列表
  * @param account
  * @param begin
  * @param keyword
- * @return [文章列表, 是否加载完毕, 文章总数]
+ * @param syncToTimestamp 本次同步的最早截止时间，早于该时间的文章不会写入缓存
+ * @return [文章列表, 是否加载完毕, 文章总数, 是否已触达同步截止时间]
  */
 export async function getArticleList(
   account: MpAccount,
   begin = 0,
-  keyword = ''
-): Promise<[AppMsgEx[], boolean, number]> {
+  keyword = '',
+  syncToTimestamp?: number
+): Promise<[AppMsgEx[], boolean, number, boolean]> {
   const resp = await request<AppMsgPublishResponse>('/api/web/mp/appmsgpublish', {
     query: {
       id: account.fakeid,
@@ -41,6 +84,7 @@ export async function getArticleList(
   if (resp.base_resp.ret === 0) {
     const publish_page: PublishPage = JSON.parse(resp.publish_page);
     const publish_list = publish_page.publish_list.filter(item => !!item.publish_info);
+    const [publishPageForCache, reachedSyncLimit] = filterPublishPageByTimestamp(publish_page, syncToTimestamp);
 
     // 返回的文章数量为0就表示已加载完毕
     const isCompleted = publish_list.length === 0;
@@ -48,7 +92,7 @@ export async function getArticleList(
     // 更新缓存，注意带有关键字搜索的结果不能写入缓存
     if (!keyword) {
       try {
-        await updateArticleCache(account, publish_page);
+        await updateArticleCache(account, publishPageForCache, { completed: isCompleted });
 
         if (begin === 0) {
           await updateLastUpdateTime(account.fakeid);
@@ -62,7 +106,7 @@ export async function getArticleList(
       const publish_info: PublishInfo = JSON.parse(item.publish_info);
       return publish_info.appmsgex;
     });
-    return [articles, isCompleted, publish_page.total_count];
+    return [articles, isCompleted, publish_page.total_count, reachedSyncLimit];
   } else if (resp.base_resp.ret === 200003) {
     loginAccount.value = null;
     throw new Error('session expired');

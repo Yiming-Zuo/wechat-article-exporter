@@ -517,7 +517,7 @@ async function addAccount(credential: ParsedCredential) {
   if (credential.added || addingBiz.value === credential.biz) {
     return;
   }
-  if (!checkLogin()) return;
+  if (!(await checkLogin())) return;
 
   addingBiz.value = credential.biz;
   const nickname = credential.nickname || credential.biz;

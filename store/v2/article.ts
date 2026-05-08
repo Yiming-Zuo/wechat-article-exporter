@@ -4,12 +4,20 @@ import { type MpAccount, updateInfoCache } from './info';
 
 export type ArticleAsset = AppMsgExWithFakeID;
 
+interface UpdateArticleCacheOptions {
+  completed?: boolean;
+}
+
 /**
  * 更新文章缓存
  * @param account
  * @param publish_page
  */
-export async function updateArticleCache(account: MpAccount, publish_page: PublishPage) {
+export async function updateArticleCache(
+  account: MpAccount,
+  publish_page: PublishPage,
+  options: UpdateArticleCacheOptions = {}
+) {
   await db.transaction('rw', ['article', 'info'], async () => {
     const keys = await db.article.toCollection().keys();
 
@@ -41,7 +49,7 @@ export async function updateArticleCache(account: MpAccount, publish_page: Publi
 
     await updateInfoCache({
       fakeid: fakeid,
-      completed: publish_list.length === 0,
+      completed: options.completed ?? publish_list.length === 0,
       count: msgCount,
       articles: articleCount,
       nickname: account.nickname,

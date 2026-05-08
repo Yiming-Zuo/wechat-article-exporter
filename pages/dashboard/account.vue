@@ -68,8 +68,8 @@ accountEventBus.on(event => {
 const searchAccountDialogRef = ref<typeof GlobalSearchAccountDialog | null>(null);
 
 const addBtnLoading = ref(false);
-function addAccount() {
-  if (!checkLogin()) return;
+async function addAccount() {
+  if (!(await checkLogin())) return;
 
   searchAccountDialogRef.value!.open();
 }
@@ -145,7 +145,7 @@ async function _load(
   syncingRowId.value = account.fakeid;
   isSyncing.value = true;
 
-  const [articles, completed] = await getArticleList(account, begin);
+  const [articles, completed, _, reachedSyncLimit] = await getArticleList(account, begin, '', syncToTimestamp);
   if (isCanceled.value) {
     isCanceled.value = false;
     promise.reject(new Error('已取消同步'));
@@ -165,7 +165,7 @@ async function _load(
   // 检查是否可以「快进」，也就是存在比 lastArticle 更早的缓存数据
   // todo: 这里还可以继续优化，防止出现多段不连续的范围
   const lastArticle = articles.at(-1);
-  if (lastArticle && lastArticle.create_time < account.last_update_time!) {
+  if (!reachedSyncLimit && lastArticle && lastArticle.create_time < account.last_update_time!) {
     if (await hitCache(account.fakeid, lastArticle.create_time)) {
       const cachedArticles = await getArticleCache(account.fakeid, lastArticle.create_time);
 
@@ -176,7 +176,7 @@ async function _load(
     }
   }
 
-  if (articles.at(-1)!.create_time < syncToTimestamp) {
+  if (reachedSyncLimit || articles.at(-1)!.create_time < syncToTimestamp) {
     // 已同步到本次选择的截止时间
     loadMore = false;
   }
@@ -220,7 +220,7 @@ async function loadAccountArticle(account: MpAccount, syncToTimestamp: number, l
 }
 
 async function syncSingleAccount(account: MpAccount) {
-  if (!checkLogin()) return;
+  if (!(await checkLogin())) return;
 
   const selection = await openSyncRangeModal();
   if (!selection) return;
@@ -237,7 +237,7 @@ async function syncSingleAccount(account: MpAccount) {
 
 // 同步所有公众号
 async function loadSelectedAccountArticle() {
-  if (!checkLogin()) return;
+  if (!(await checkLogin())) return;
 
   const selection = await openSyncRangeModal();
   if (!selection) return;

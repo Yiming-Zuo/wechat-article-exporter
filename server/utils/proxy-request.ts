@@ -1,10 +1,26 @@
 import dayjs from 'dayjs';
-import { H3Event, parseCookies } from 'h3';
+import { getRequestHeader, getRequestURL, H3Event, parseCookies } from 'h3';
 import { v4 as uuidv4 } from 'uuid';
 import { isDev, USER_AGENT } from '~/config';
-import { RequestOptions } from '~/server/types';
+import type { RequestOptions } from '~/server/types';
 import { cookieStore, getCookieFromStore } from '~/server/utils/CookieStore';
 import { logRequest, logResponse } from '~/server/utils/logger';
+
+function shouldUseSecureCookie(event: H3Event): boolean {
+  const forwardedProto = getRequestHeader(event, 'x-forwarded-proto');
+  if (forwardedProto) {
+    return forwardedProto.split(',')[0].trim() === 'https';
+  }
+  return getRequestURL(event).protocol === 'https:';
+}
+
+function buildHttpOnlyCookie(event: H3Event, name: string, value: string, expires: Date): string {
+  const parts = [`${name}=${value}`, 'Path=/', `Expires=${expires.toUTCString()}`, 'HttpOnly', 'SameSite=Lax'];
+  if (shouldUseSecureCookie(event)) {
+    parts.push('Secure');
+  }
+  return parts.join('; ');
+}
 
 /**
  * 代理微信公众号请求
@@ -93,10 +109,10 @@ export async function proxyMpRequest(options: RequestOptions) {
       console.log('cookie 写入成功');
 
       setCookies = [
-        `auth-key=${authKey}; Path=/; Expires=${dayjs().add(4, 'days').toString()}; Secure; HttpOnly`,
+        buildHttpOnlyCookie(options.event, 'auth-key', authKey, dayjs().add(4, 'days').toDate()),
 
         // 登录成功后，删除浏览器的 uuid cookie
-        `uuid=EXPIRED; Path=/; Expires=${dayjs().subtract(1, 'days').toString()}; Secure; HttpOnly`,
+        buildHttpOnlyCookie(options.event, 'uuid', 'EXPIRED', dayjs().subtract(1, 'days').toDate()),
       ];
     } catch (error) {
       console.error('action(login) failed:', error);
@@ -151,6 +167,10 @@ export function getAuthKeyFromRequest(event: H3Event): string {
   }
 
   return authKey;
+}
+
+export function buildExpiredAuthKeyCookie(event: H3Event): string {
+  return buildHttpOnlyCookie(event, 'auth-key', 'EXPIRED', dayjs().subtract(1, 'days').toDate());
 }
 
 // function updateCookies(event: H3Event, cookies: string[]): void {

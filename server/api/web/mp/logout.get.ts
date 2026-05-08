@@ -2,35 +2,39 @@
  * 退出登录接口
  */
 
-import { parseCookies } from 'h3';
-import { cookieStore, getTokenFromStore } from '~/server/utils/CookieStore';
-import { proxyMpRequest } from '~/server/utils/proxy-request';
+import { appendResponseHeader, getRequestHeader, parseCookies } from 'h3';
+import { cookieStore, getCookieFromStore, getTokenFromStore } from '~/server/utils/CookieStore';
+import { buildExpiredAuthKeyCookie, proxyMpRequest } from '~/server/utils/proxy-request';
 
 export default defineEventHandler(async event => {
-  const token = await getTokenFromStore(event);
-  if (!token) {
-    return { statusCode: 401, statusText: '未登录或登录已过期，请重新扫码登录' };
-  }
-
-  const response: Response = await proxyMpRequest({
-    event: event,
-    method: 'GET',
-    endpoint: 'https://mp.weixin.qq.com/cgi-bin/logout',
-    query: {
-      t: 'wxm-logout',
-      token: token,
-      lang: 'zh_CN',
-    },
-  });
-
-  // 登出后清理内存中的 cookie 缓存
   const authKey = getRequestHeader(event, 'X-Auth-Key') || parseCookies(event)['auth-key'];
-  if (authKey) {
-    cookieStore.removeCookie(authKey);
-  }
+  const [token, cookie] = await Promise.all([getTokenFromStore(event), getCookieFromStore(event)]);
 
-  return {
-    statusCode: response.status,
-    statusText: response.statusText,
-  };
+  try {
+    if (!token || !cookie) {
+      return { statusCode: 200, statusText: 'OK' };
+    }
+
+    const response: Response = await proxyMpRequest({
+      event: event,
+      method: 'GET',
+      endpoint: 'https://mp.weixin.qq.com/cgi-bin/logout',
+      query: {
+        t: 'wxm-logout',
+        token: token,
+        lang: 'zh_CN',
+      },
+      cookie,
+    });
+
+    return {
+      statusCode: response.status,
+      statusText: response.statusText,
+    };
+  } finally {
+    if (authKey) {
+      await cookieStore.removeCookie(authKey);
+    }
+    appendResponseHeader(event, 'set-cookie', buildExpiredAuthKeyCookie(event));
+  }
 });
